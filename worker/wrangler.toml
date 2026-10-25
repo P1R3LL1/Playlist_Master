@@ -1,0 +1,11 @@
+name = "playlist-master"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+CLIENT_ID = "908449dafbc64bc19fe67464d466786d"
+
+# KV-Namespace im Dashboard anlegen und die ID hier eintragen (nur für Deploy per wrangler nötig)
+# [[kv_namespaces]]
+# binding = "PM"
+# id = "<KV-ID>"
