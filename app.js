@@ -116,7 +116,9 @@
       if (raw) return res;
       if (res.status === 204) return null;
       const text = await res.text();
-      const data = text ? JSON.parse(text) : null;
+      // Manche Player-Endpunkte antworten mit leerem Body oder reinem Text statt JSON
+      let data = null;
+      if (text) { try { data = JSON.parse(text); } catch { data = text; } }
       if (!res.ok) {
         const err = new Error((data && data.error && data.error.message) || ("HTTP " + res.status));
         err.status = res.status;
