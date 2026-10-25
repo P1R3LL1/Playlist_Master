@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Playlist Master">
+  <title>Playlist Master</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Playlist Master</h1>
+    <button id="logoutBtn" class="ghost small" hidden>Abmelden</button>
+  </header>
+
+  <!-- Login -->
+  <section id="loginView" class="view" hidden>
+    <div class="card center">
+      <p>Melde dich mit Spotify an, um deine Playlists zu verwalten.</p>
+      <button id="loginBtn" class="primary big">Mit Spotify anmelden</button>
+    </div>
+  </section>
+
+  <!-- App -->
+  <main id="appView" hidden>
+    <nav class="tabs">
+      <button data-tab="now" class="active">Läuft gerade</button>
+      <button data-tab="build">Playlists</button>
+      <button data-tab="black">Blacklist</button>
+    </nav>
+
+    <!-- Now playing -->
+    <section id="tab-now" class="view">
+      <div class="card now">
+        <img id="npCover" alt="" class="cover" hidden>
+        <div class="np-meta">
+          <div id="npTitle" class="np-title">Nichts läuft gerade</div>
+          <div id="npArtist" class="np-artist"></div>
+          <div id="npAlbum" class="np-album"></div>
+          <div id="npContext" class="np-context"></div>
+        </div>
+      </div>
+      <button id="kickBtn" class="danger huge" disabled>Kicken</button>
+      <div class="row">
+        <button id="skipBtn" class="ghost" disabled>Nur überspringen</button>
+        <button id="refreshBtn" class="ghost">Aktualisieren</button>
+      </div>
+      <div id="toast" class="toast" hidden></div>
+    </section>
+
+    <!-- Playlist builder -->
+    <section id="tab-build" class="view" hidden>
+      <div class="card">
+        <label for="catSelect">Kategorie</label>
+        <select id="catSelect"></select>
+        <label for="artistList">Künstler (einer pro Zeile)</label>
+        <textarea id="artistList" rows="12" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="saveArtistsBtn" class="ghost">Liste speichern</button>
+          <button id="buildBtn" class="primary">Playlist befüllen</button>
+        </div>
+        <p class="hint">Es werden nur Studioalben übernommen (ohne Live, Compilations, Deluxe-Duplikate). Gekickte Songs werden übersprungen. Bereits vorhandene Songs werden nicht doppelt eingefügt.</p>
+      </div>
+      <div class="card">
+        <div class="progress"><div id="progressBar"></div></div>
+        <pre id="buildLog" class="log"></pre>
+      </div>
+    </section>
+
+    <!-- Blacklist -->
+    <section id="tab-black" class="view" hidden>
+      <div class="card">
+        <p class="hint">Gekickte Songs. Sie werden beim Befüllen nicht wieder eingefügt.</p>
+        <ul id="blackList" class="blacklist"></ul>
+        <div class="row">
+          <button id="exportBtn" class="ghost">Exportieren</button>
+          <label class="ghost button-like">Importieren<input id="importInput" type="file" accept="application/json" hidden></label>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
