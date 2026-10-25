@@ -321,10 +321,15 @@
     return uris;
   }
 
-  async function findOrCreatePlaylist(name) {
+  async function findPlaylist(name) {
     const mine = await getAll("/me/playlists", 50);
     const found = mine.find((p) => p.name === name);
-    if (found) return found.id;
+    return found ? found.id : null;
+  }
+
+  async function findOrCreatePlaylist(name) {
+    const id = await findPlaylist(name);
+    if (id) return id;
     const p = await api("/me/playlists", {
       method: "POST",
       body: { name, public: false, description: "Erstellt mit Playlist Master – nur Studioalben" },
@@ -332,9 +337,9 @@
     return p.id;
   }
 
-  async function playlistUris(id) {
+  async function playlistTracks(id) {
     const entries = await getAll(`/playlists/${id}/items`, 50).catch(() => getAll(`/playlists/${id}/tracks`, 50));
-    return new Set(entries.map(entryTrack).filter(Boolean).map((t) => t.uri));
+    return entries.map(entryTrack).filter(Boolean);
   }
 
   async function addToPlaylist(id, uris, onProgress) {
@@ -353,71 +358,204 @@
     }
   }
 
-  let building = false;
-  async function buildPlaylist() {
-    if (building) return;
-    building = true;
-    $("buildBtn").disabled = true;
-    const logEl = $("buildLog");
-    logEl.textContent = "";
-    const log = (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; };
-    const bar = $("progressBar");
-    bar.style.width = "0%";
-    try {
-      const cat = $("catSelect").value;
-      const artists = $("artistList").value.split("\n").map((s) => s.trim()).filter(Boolean);
-      const plName = CFG.playlistPrefix + cat;
-      log(`Playlist „${plName}“ wird vorbereitet …`);
-      const plId = await findOrCreatePlaylist(plName);
-      const existing = await playlistUris(plId);
-      log(`${existing.size} Songs bereits in der Playlist.\n`);
-
-      const all = [];
-      for (let k = 0; k < artists.length; k++) {
-        const name = artists[k];
-        try {
-          const a = await findArtist(name);
-          if (!a) { log(`✗ ${name}: nicht gefunden`); continue; }
-          log(`● ${name}${a.name !== name ? " → " + a.name : ""}`);
-          const uris = await artistTrackUris(a.id, log);
-          const fresh = uris.filter((u) => !existing.has(u));
-          fresh.forEach((u) => existing.add(u));
-          all.push(...fresh);
-          log(`  ${uris.length} Songs, davon ${fresh.length} neu`);
-        } catch (e) {
-          log(`✗ ${name}: ${e.message}`);
-        }
-        bar.style.width = Math.round(((k + 1) / artists.length) * 50) + "%";
+  async function removeManyFromPlaylist(id, uris, onProgress) {
+    let batch = 100;
+    let i = 0;
+    while (i < uris.length) {
+      const chunk = uris.slice(i, i + batch);
+      try {
+        await api(`/playlists/${id}/items`, { method: "DELETE", body: { items: chunk.map((uri) => ({ uri })) } });
+        i += chunk.length;
+        onProgress(i);
+      } catch (e) {
+        if (e.status === 400 && batch > 10) { batch = 10; continue; }
+        throw e;
       }
-
-      if (existing.size > 10000) log(`\n⚠ Über 10.000 Songs – Spotify erlaubt max. ca. 10.000 pro Playlist. Liste besser aufteilen.`);
-      log(`\nFüge ${all.length} neue Songs hinzu …`);
-      await addToPlaylist(plId, all, (n) => { bar.style.width = (50 + Math.round((n / Math.max(all.length, 1)) * 50)) + "%"; });
-      bar.style.width = "100%";
-      log(`✓ Fertig. „${plName}“ enthält jetzt ca. ${existing.size} Songs.`);
-    } catch (e) {
-      log("Fehler: " + e.message);
-    } finally {
-      building = false;
-      $("buildBtn").disabled = false;
     }
   }
 
-  // ---------------------------------------------------------------- Kategorien
+  // ---------------------------------------------------------------- Kategorien & Künstlerliste
+  const sortDe = (arr) => arr.sort((a, b) => a.localeCompare(b, "de", { sensitivity: "base" }));
+  const sameName = (a, b) => a.localeCompare(b, "de", { sensitivity: "base" }) === 0;
+
   function categories() { return store.get("categories", CFG.categories); }
+  function saveCategories(c) { store.set("categories", c); }
+  function loadedMap() { return store.get("loaded", {}); }
+  function isLoaded(cat, name) { return (loadedMap()[cat] || []).some((n) => sameName(n, name)); }
+  function setLoaded(cat, name, on) {
+    const m = loadedMap();
+    const list = (m[cat] || []).filter((n) => !sameName(n, name));
+    if (on) list.push(name);
+    m[cat] = list;
+    store.set("loaded", m);
+  }
+
+  let selectedArtist = null;
+  let busy = false;
+  const currentCat = () => $("catSelect").value;
+
   function initBuilder() {
     const sel = $("catSelect");
     sel.innerHTML = "";
     Object.keys(categories()).forEach((c) => { const o = document.createElement("option"); o.value = o.textContent = c; sel.appendChild(o); });
-    const show = () => { $("artistList").value = (categories()[sel.value] || []).join("\n"); };
-    sel.onchange = show;
-    show();
+    sel.onchange = () => { selectedArtist = null; renderArtists(); };
+    renderArtists();
   }
-  function saveArtists() {
+
+  function renderArtists() {
+    const cat = currentCat();
+    const names = sortDe([...(categories()[cat] || [])]);
+    const ul = $("artistUl");
+    ul.innerHTML = "";
+    for (const name of names) {
+      const li = document.createElement("li");
+      li.textContent = name;
+      if (!isLoaded(cat, name)) {
+        const tag = document.createElement("small");
+        tag.textContent = "noch nicht geladen";
+        li.appendChild(tag);
+      }
+      if (selectedArtist && sameName(selectedArtist, name)) li.classList.add("selected");
+      li.onclick = () => {
+        selectedArtist = selectedArtist && sameName(selectedArtist, name) ? null : name;
+        renderArtists();
+      };
+      ul.appendChild(li);
+    }
+    const btn = $("removeArtistBtn");
+    btn.disabled = !selectedArtist || busy;
+    btn.textContent = selectedArtist ? `„${selectedArtist}“ aus Playlist entfernen` : "Künstler aus Playlist entfernen";
+    const missing = names.filter((n) => !isLoaded(cat, n));
+    const lm = $("loadMissingBtn");
+    lm.hidden = missing.length === 0;
+    lm.disabled = busy;
+    lm.textContent = `${missing.length} noch nicht geladene Künstler jetzt laden`;
+  }
+
+  function setBusy(on) {
+    busy = on;
+    $("addArtistBtn").disabled = on;
+    renderArtists();
+  }
+
+  function logger() {
+    const logEl = $("buildLog");
+    logEl.textContent = "";
+    $("progressBar").style.width = "0%";
+    return (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; };
+  }
+
+  // Studioalben der angegebenen Künstler in die Kategorie-Playlist laden
+  async function loadArtists(cat, names) {
+    if (busy || !names.length) return;
+    setBusy(true);
+    const log = logger();
+    const bar = $("progressBar");
+    try {
+      const plName = CFG.playlistPrefix + cat;
+      log(`Playlist „${plName}“ wird vorbereitet …`);
+      const plId = await findOrCreatePlaylist(plName);
+      const existing = new Set((await playlistTracks(plId)).map((t) => t.uri));
+      log(`${existing.size} Songs bereits in der Playlist.\n`);
+
+      const all = [];
+      const ok = [];
+      for (let k = 0; k < names.length; k++) {
+        const name = names[k];
+        try {
+          const a = await findArtist(name);
+          if (!a) { log(`✗ ${name}: nicht gefunden`); continue; }
+          log(`● ${name}${!sameName(a.name, name) ? " → " + a.name : ""}`);
+          const uris = await artistTrackUris(a.id, log);
+          const fresh = uris.filter((u) => !existing.has(u));
+          fresh.forEach((u) => existing.add(u));
+          all.push(...fresh);
+          ok.push(name);
+          log(`  ${uris.length} Songs, davon ${fresh.length} neu`);
+        } catch (e) {
+          log(`✗ ${name}: ${e.message}`);
+        }
+        bar.style.width = Math.round(((k + 1) / names.length) * 50) + "%";
+      }
+
+      if (existing.size > 10000) log(`\n⚠ Über 10.000 Songs – Spotify erlaubt max. ca. 10.000 pro Playlist.`);
+      log(`\nFüge ${all.length} neue Songs hinzu …`);
+      await addToPlaylist(plId, all, (n) => { bar.style.width = (50 + Math.round((n / Math.max(all.length, 1)) * 50)) + "%"; });
+      ok.forEach((n) => setLoaded(cat, n, true));
+      bar.style.width = "100%";
+      log(`✓ Fertig. „${plName}“ enthält jetzt ca. ${existing.size} Songs.`);
+      toast(`${all.length} Songs hinzugefügt`);
+    } catch (e) {
+      log("Fehler: " + e.message);
+      toast("Fehler: " + e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addArtist() {
+    const input = $("artistInput");
+    const name = input.value.trim().replace(/\s+/g, " ");
+    if (!name) return;
+    const cat = currentCat();
     const cats = categories();
-    cats[$("catSelect").value] = $("artistList").value.split("\n").map((s) => s.trim()).filter(Boolean);
-    store.set("categories", cats);
-    toast("Liste gespeichert");
+    const list = cats[cat] || [];
+    if (list.some((n) => sameName(n, name))) {
+      toast(`„${name}“ steht schon in ${cat}`);
+      return;
+    }
+    cats[cat] = sortDe([...list, name]);
+    saveCategories(cats);
+    input.value = "";
+    selectedArtist = null;
+    renderArtists();
+    await loadArtists(cat, [name]);
+  }
+
+  async function removeArtist() {
+    if (!selectedArtist || busy) return;
+    const cat = currentCat();
+    const name = selectedArtist;
+    const plName = CFG.playlistPrefix + cat;
+    if (!confirm(`„${name}“ aus der Liste ${cat} streichen und alle Songs aus „${plName}“ entfernen?`)) return;
+    setBusy(true);
+    const log = logger();
+    const bar = $("progressBar");
+    try {
+      const plId = await findPlaylist(plName);
+      let removed = 0;
+      if (plId) {
+        const a = await findArtist(name);
+        const tracks = await playlistTracks(plId);
+        const uris = [...new Set(tracks
+          .filter((t) => (t.artists || []).some((x) => (a && x.id === a.id) || sameName(x.name, name)))
+          .map((t) => t.uri))];
+        log(`Entferne ${uris.length} Songs von ${name} …`);
+        await removeManyFromPlaylist(plId, uris, (n) => { bar.style.width = Math.round((n / Math.max(uris.length, 1)) * 100) + "%"; });
+        removed = uris.length;
+      }
+      const cats = categories();
+      cats[cat] = (cats[cat] || []).filter((n) => !sameName(n, name));
+      saveCategories(cats);
+      setLoaded(cat, name, false);
+      selectedArtist = null;
+      bar.style.width = "100%";
+      log(`✓ ${name} entfernt (${removed} Songs).`);
+      toast(`${name} entfernt (${removed} Songs)`);
+    } catch (e) {
+      log("Fehler: " + e.message);
+      toast("Fehler: " + e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadMissing() {
+    const cat = currentCat();
+    const missing = sortDe([...(categories()[cat] || [])]).filter((n) => !isLoaded(cat, n));
+    if (!missing.length) return;
+    if (!confirm(`${missing.length} Künstler in ${cat} laden? Das kann einige Minuten dauern.`)) return;
+    await loadArtists(cat, missing);
   }
 
   // ---------------------------------------------------------------- Blacklist-Ansicht
@@ -477,8 +615,10 @@
     $("kickBtn").onclick = kick;
     $("skipBtn").onclick = skip;
     $("refreshBtn").onclick = refreshNow;
-    $("buildBtn").onclick = buildPlaylist;
-    $("saveArtistsBtn").onclick = saveArtists;
+    $("addArtistBtn").onclick = addArtist;
+    $("artistInput").onkeydown = (e) => { if (e.key === "Enter") addArtist(); };
+    $("removeArtistBtn").onclick = removeArtist;
+    $("loadMissingBtn").onclick = loadMissing;
     $("exportBtn").onclick = exportBlacklist;
     $("importInput").onchange = (e) => e.target.files[0] && importBlacklist(e.target.files[0]);
     initTabs();

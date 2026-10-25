@@ -56,13 +56,15 @@
       <div class="card">
         <label for="catSelect">Kategorie</label>
         <select id="catSelect"></select>
-        <label for="artistList">Künstler (einer pro Zeile)</label>
-        <textarea id="artistList" rows="12" spellcheck="false"></textarea>
-        <div class="row">
-          <button id="saveArtistsBtn" class="ghost">Liste speichern</button>
-          <button id="buildBtn" class="primary">Playlist befüllen</button>
+        <label for="artistInput">Künstler</label>
+        <div class="addrow">
+          <input id="artistInput" type="text" placeholder="Name der Band" autocomplete="off" autocapitalize="words">
+          <button id="addArtistBtn" class="primary">Künstler hinzufügen</button>
         </div>
-        <p class="hint">Es werden nur Studioalben übernommen (ohne Live, Compilations, Deluxe-Duplikate). Gekickte Songs werden übersprungen. Bereits vorhandene Songs werden nicht doppelt eingefügt.</p>
+        <ul id="artistUl" class="artistlist"></ul>
+        <button id="removeArtistBtn" class="danger full" disabled>Künstler aus Playlist entfernen</button>
+        <button id="loadMissingBtn" class="ghost full" hidden></button>
+        <p class="hint">Neue Künstler werden mit allen Studioalben geladen (ohne Live, Compilations, Deluxe-Duplikate). Gekickte Songs bleiben draußen.</p>
       </div>
       <div class="card">
         <div class="progress"><div id="progressBar"></div></div>

@@ -65,3 +65,19 @@ textarea { font-size: 15px; resize: vertical; }
 .toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 16px); max-width: 608px; margin: 0 auto;
   background: #222833; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .toast.error { border-color: var(--danger); }
+
+/* Künstlerliste */
+.addrow { display: flex; gap: 8px; }
+.addrow input {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+}
+.addrow button { flex: none; }
+.artistlist { list-style: none; padding: 0; margin: 12px 0; max-height: 50vh; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px; }
+.artistlist li { padding: 11px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.artistlist li:last-child { border-bottom: 0; }
+.artistlist li small { color: var(--muted); font-size: 12px; }
+.artistlist li.selected { background: #2a1a1c; box-shadow: inset 3px 0 0 var(--danger); }
+.full { width: 100%; margin-top: 8px; }
