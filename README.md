@@ -15,7 +15,7 @@ Private Web-App für Spotify: Genre-Playlists aus kompletten Studio-Discografien
 
 ## Setup
 - Spotify-Developer-App „Playlist Manager Dennis“, Client ID in `config.js`
-- Redirect-URIs im Spotify-Dashboard: `http://127.0.0.1:8888/callback` (lokal) und die GitHub-Pages-Adresse `https://p1r3ll1.github.io/Playlist_Master/`
+- Redirect-URIs im Spotify-Dashboard: `http://127.0.0.1:8888/callback` (lokal) und die GitHub-Pages-Adresse `https://p1r3ll1.github.io/playlist_master/`
 - Hosting: GitHub Pages (Branch `main`, Ordner `/`)
 
 Lokal testen: `python3 -m http.server 8888 --bind 127.0.0.1` und `http://127.0.0.1:8888/` öffnen (Redirect-URI dafür: `http://127.0.0.1:8888/`).
