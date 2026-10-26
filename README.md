@@ -7,8 +7,12 @@ Private Web-App für Spotify: Genre-Playlists aus kompletten Studio-Discografien
 - **Playlists:** pro Kategorie (Metal, Rock, Electro, Rap & HipHop, Softrock & Indie) eine Playlist `PM · <Kategorie>`. Nur Studioalben, ohne Live-, Compilation- und Deluxe-Duplikate. Gekickte Songs werden übersprungen.
 - **Blacklist:** gekickte Songs ansehen, zurückholen, exportieren/importieren.
 
-## Geplant (Cloudflare Worker)
-- Siri-Kurzbefehl „Song kicken“ (freihändig über CarPlay)
+## Cloudflare Worker
+- Läuft unter `https://playlist-master.d-bonsendorf.workers.dev` (Code in `worker/`), KV-Speicher `playlist-master` als Binding `PM`
+- `/login` verbindet den Worker einmalig mit Spotify und zeigt den persönlichen Kick-Link
+- Siri-Kurzbefehl „Song kicken“ ruft den Kick-Link auf (freihändig über CarPlay)
+
+## Geplant
 - Neuerscheinungen der eigenen Künstler (MusicBrainz)
 - Vorschläge neuer Künstler mit Probehör-Playlist (Last.fm)
 - Konzerte in NRW (Ticketmaster Discovery API, ohne Festivals)
