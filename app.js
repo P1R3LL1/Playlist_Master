@@ -731,11 +731,14 @@
     const names = [...new Set(Object.values(categories()).flat())].sort((a, b) => a.localeCompare(b, "de"));
     const status = (t) => { const el = $("eventimStatus"); if (el) el.textContent = t; };
     let done = 0, failed = 0, pending = {};
-    const flush = async () => {
-      if (!Object.keys(pending).length) return;
+    // Übertragungen strikt nacheinander, sonst überschreiben sie sich im Worker-Speicher
+    let chain = Promise.resolve();
+    const flush = () => {
+      if (!Object.keys(pending).length) return chain;
       const body = { source: "eventim", results: pending };
       pending = {};
-      await wapi("/concerts/import", { method: "POST", body });
+      chain = chain.then(() => wapi("/concerts/import", { method: "POST", body }));
+      return chain;
     };
     try {
       const queue = [...names];
@@ -750,6 +753,7 @@
       };
       await Promise.all([worker(), worker(), worker()]);
       await flush();
+      await chain;
       store.set("eventimScan", Date.now());
       status(`Eventim zuletzt durchsucht: ${new Date().toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })}` + (failed ? ` (${failed} Fehler)` : ""));
       if (!$("tab-live").hidden) loadConcerts();
