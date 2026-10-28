@@ -56,7 +56,7 @@ export async function searchEventim(artist) {
 // ------------------------------------------------------------------ Ticketmaster
 export async function searchTicketmaster(artist, apiKey) {
   if (!apiKey) return [];
-  const params = new URLSearchParams({ apikey: apiKey, keyword: artist, countryCode: "DE", classificationName: "music", size: "100", sort: "date,asc" });
+  const params = new URLSearchParams({ apikey: apiKey, keyword: artist, countryCode: "DE", classificationName: "music", locale: "de-de,*", size: "100", sort: "date,asc" });
   const res = await fetch("https://app.ticketmaster.com/discovery/v2/events.json?" + params);
   if (!res.ok) throw new Error("Ticketmaster " + res.status);
   const data = await res.json();
@@ -92,7 +92,7 @@ export function relevant(ev, artist) {
   return true;
 }
 
-const dayKey = (ev, artist) => `${String(ev.start).slice(0, 10)}|${norm(artist)}|${norm(ev.city)}`;
+const dayKey = (ev, artist) => `${String(ev.start).slice(0, 10)}|${norm(artist)}|${String(ev.plz).trim().slice(0, 3)}`;  // PLZ statt Stadt (TM schreibt z. B. „Cologne“)
 
 export function mergeInto(store, artist, events, pruneSource = null, now = new Date().toISOString()) {
   const a = norm(artist);
@@ -106,8 +106,9 @@ export function mergeInto(store, artist, events, pruneSource = null, now = new D
     cur.date = String(ev.start).slice(0, 10);
     if (String(ev.start).length > 10 && (!cur.time || ev.source === "eventim")) cur.time = String(ev.start).slice(11, 16);
     cur.time = cur.time || "";
-    cur.venue = cur.venue && ev.source === "ticketmaster" ? cur.venue : ev.venue;
-    cur.city = ev.city.replace(/\s*\(.*\)$/, "");
+    if (ev.venue && (!cur.venue || ev.source === "eventim")) cur.venue = ev.venue;
+    cur.venue = cur.venue || "";
+    if (!cur.city || ev.source === "eventim") cur.city = ev.city.replace(/\s*\(.*\)$/, "");
     cur.plz = ev.plz;
     if (ev.price != null && (cur.price == null || ev.price < cur.price)) { cur.price = ev.price; cur.currency = ev.currency; }
     cur.links[ev.source] = ev.url;

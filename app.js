@@ -679,7 +679,7 @@
       row.querySelector(".c-date").textContent = fmtDate(c.date) + (c.time ? `\n${c.time} Uhr` : "");
       row.querySelector(".c-band").textContent = c.artist + (isNew ? "  · NEU" : "");
       if (isNew) row.classList.add("new");
-      row.querySelector(".c-where").textContent = `${c.venue}, ${c.city}`;
+      row.querySelector(".c-where").textContent = c.venue ? `${c.venue}, ${c.city}` : c.city;
       const meta = row.querySelector(".c-meta");
       meta.textContent = price;
       for (const [src, label] of [["eventim", "Eventim"], ["ticketmaster", "Ticketmaster"]]) {
