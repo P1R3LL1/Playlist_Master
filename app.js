@@ -745,7 +745,7 @@
       const worker = async () => {
         while (queue.length) {
           const name = queue.shift();
-          try { pending[name] = await eventimSearch(name); } catch { failed++; }
+          try { const r = await eventimSearch(name); pending[name] = r; } catch { failed++; }  // erst nach dem await zuweisen, sonst landet es in einem schon übertragenen Paket
           done++;
           status(`Eventim: ${done}/${names.length} Künstler geprüft …`);
           if (Object.keys(pending).length >= 15) await flush();
