@@ -52,6 +52,12 @@ export default {
           return text(await kick(env), 200, cors);
         case "/blacklist":
           await requireKey(url, env);
+          if (request.method === "DELETE") {
+            const bl = await getJSON(env, "blacklist", {});
+            delete bl[url.searchParams.get("uri")];
+            await env.PM.put("blacklist", JSON.stringify(bl));
+            return json({ ok: true, count: Object.keys(bl).length }, 200, cors);
+          }
           if (request.method === "POST") {
             const incoming = await request.json();
             const merged = { ...(await getJSON(env, "blacklist", {})), ...incoming };
@@ -95,7 +101,7 @@ export default {
 function corsHeaders(request) {
   const origin = request.headers.get("Origin");
   return ALLOWED_ORIGINS.includes(origin)
-    ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" }
+    ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" }
     : {};
 }
 const text = (s, status = 200, headers = {}) => new Response(s, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...headers } });

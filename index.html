@@ -29,6 +29,7 @@
     <nav class="tabs">
       <button data-tab="now" class="active">Läuft gerade</button>
       <button data-tab="build">Playlists</button>
+      <button data-tab="live">Konzerte</button>
       <button data-tab="black">Blacklist</button>
     </nav>
 
@@ -72,15 +73,27 @@
       </div>
     </section>
 
+    <!-- Konzerte -->
+    <section id="tab-live" class="view" hidden>
+      <div id="workerSetup" class="card" hidden>
+        <p>Einmalig: deinen Kick-Link einfügen (den aus dem Siri-Kurzbefehl). Damit verbindet sich die App mit deinem Worker.</p>
+        <input id="workerInput" type="url" placeholder="https://playlist-master…workers.dev/kick?key=…" autocomplete="off">
+        <button id="workerSaveBtn" class="primary full">Verbinden</button>
+      </div>
+      <div id="liveView" hidden>
+        <div class="row">
+          <button id="liveRefreshBtn" class="ghost">Weitere Künstler jetzt prüfen</button>
+        </div>
+        <p id="liveStatus" class="hint"></p>
+        <div id="liveList"></div>
+      </div>
+    </section>
+
     <!-- Blacklist -->
     <section id="tab-black" class="view" hidden>
       <div class="card">
         <p class="hint">Gekickte Songs. Sie werden beim Befüllen nicht wieder eingefügt.</p>
         <ul id="blackList" class="blacklist"></ul>
-        <div class="row">
-          <button id="exportBtn" class="ghost">Exportieren</button>
-          <label class="ghost button-like">Importieren<input id="importInput" type="file" accept="application/json" hidden></label>
-        </div>
       </div>
     </section>
   </main>

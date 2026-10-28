@@ -226,6 +226,7 @@
     $("kickBtn").disabled = true;
     try {
       blacklist.add(c.uri, { name: c.name, artists: c.artists, album: c.album });
+      pushBlacklistAdd(c.uri);
       let msg = "";
       if (c.playlistId) {
         try { await removeFromPlaylist(c.playlistId, c.uri); msg = `„${c.name}“ aus ${c.playlistName} entfernt`; }
@@ -379,7 +380,7 @@
   const sameName = (a, b) => a.localeCompare(b, "de", { sensitivity: "base" }) === 0;
 
   function categories() { return store.get("categories", CFG.categories); }
-  function saveCategories(c) { store.set("categories", c); }
+  function saveCategories(c) { store.set("categories", c); pushCategories(); }
   function loadedMap() { return store.get("loaded", {}); }
   function isLoaded(cat, name) { return (loadedMap()[cat] || []).some((n) => sameName(n, name)); }
   function setLoaded(cat, name, on) {
@@ -573,38 +574,150 @@
       const btn = document.createElement("button");
       btn.className = "ghost small";
       btn.textContent = "Zurückholen";
-      btn.onclick = () => { blacklist.remove(uri); renderBlacklist(); };
+      btn.onclick = () => { blacklist.remove(uri); pushBlacklistRemove(uri); renderBlacklist(); };
       li.append(span, btn);
       ul.appendChild(li);
     }
   }
-  function exportBlacklist() {
-    const blob = new Blob([JSON.stringify(blacklist.all(), null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "playlist-master-blacklist.json";
-    a.click();
+  // ---------------------------------------------------------------- Worker-Anbindung
+  function workerCfg() { return store.get("worker", null); }
+  function parseWorkerLink(link) {
+    try {
+      const u = new URL(link.trim());
+      const key = u.searchParams.get("key");
+      if (!key || !/workers\.dev$/.test(u.hostname)) return null;
+      return { base: u.origin, key };
+    } catch { return null; }
   }
-  async function importBlacklist(file) {
-    const data = JSON.parse(await file.text());
-    store.set("blacklist", { ...blacklist.all(), ...data });
-    renderBlacklist();
-    toast("Blacklist importiert");
+  async function wapi(path, { method = "GET", body } = {}) {
+    const w = workerCfg();
+    if (!w) throw new Error("Worker nicht verbunden");
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(`${w.base}${path}${sep}key=${encodeURIComponent(w.key)}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || "Worker " + res.status);
+    try { return JSON.parse(text); } catch { return text; }
+  }
+
+  // Künstlerlisten + Blacklist mit dem Worker abgleichen
+  async function syncWorker() {
+    if (!workerCfg()) return;
+    try {
+      await wapi("/artists", { method: "POST", body: categories() });
+      const remote = await wapi("/blacklist");
+      const local = blacklist.all();
+      const localOnly = Object.fromEntries(Object.entries(local).filter(([u]) => !remote[u]));
+      store.set("blacklist", { ...remote, ...local });
+      if (Object.keys(localOnly).length) await wapi("/blacklist", { method: "POST", body: localOnly });
+      renderBlacklist();
+    } catch (e) { console.warn("Sync", e); }
+  }
+  function pushBlacklistAdd(uri) { if (workerCfg()) wapi("/blacklist", { method: "POST", body: { [uri]: blacklist.all()[uri] } }).catch(() => {}); }
+  function pushBlacklistRemove(uri) { if (workerCfg()) wapi("/blacklist?uri=" + encodeURIComponent(uri), { method: "DELETE" }).catch(() => {}); }
+  function pushCategories() { if (workerCfg()) wapi("/artists", { method: "POST", body: categories() }).catch(() => {}); }
+
+  // ---------------------------------------------------------------- Konzerte
+  const fmtDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtMonth = (d) => new Date(d + "T12:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+
+  function initLive() {
+    const has = !!workerCfg();
+    $("workerSetup").hidden = has;
+    $("liveView").hidden = !has;
+    if (has) loadConcerts();
+  }
+
+  async function saveWorker() {
+    const cfg = parseWorkerLink($("workerInput").value);
+    if (!cfg) { toast("Das sieht nicht nach deinem Kick-Link aus", true); return; }
+    store.set("worker", cfg);
+    try { await wapi("/concerts"); } catch (e) { store.del("worker"); toast("Verbindung fehlgeschlagen: " + e.message, true); return; }
+    $("workerInput").value = "";
+    toast("Mit Worker verbunden");
+    await syncWorker();
+    initLive();
+  }
+
+  async function loadConcerts() {
+    const list = $("liveList");
+    try {
+      const data = await wapi("/concerts");
+      renderConcerts(data.concerts || []);
+      const s = data.status;
+      $("liveStatus").textContent = s
+        ? `Zuletzt geprüft: ${new Date(s.at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })} · ${s.total} Künstler werden reihum geprüft (alle 30 Min. je 8).`
+        : "Noch keine Prüfung gelaufen – tippe auf „Weitere Künstler jetzt prüfen“.";
+    } catch (e) {
+      list.innerHTML = "";
+      $("liveStatus").textContent = "Fehler: " + e.message;
+    }
+  }
+
+  function renderConcerts(items) {
+    const list = $("liveList");
+    list.innerHTML = "";
+    if (!items.length) { list.innerHTML = "<p class='hint'>Noch keine Konzerte in NRW gefunden.</p>"; return; }
+    const weekAgo = Date.now() - 7 * 864e5;
+    let month = "";
+    let card = null;
+    for (const c of items) {
+      const m = fmtMonth(c.date);
+      if (m !== month) {
+        month = m;
+        const h = document.createElement("h3"); h.className = "month"; h.textContent = m; list.appendChild(h);
+        card = document.createElement("div"); card.className = "card concerts"; list.appendChild(card);
+      }
+      const row = document.createElement("div");
+      row.className = "concert";
+      const isNew = new Date(c.firstSeen).getTime() > weekAgo;
+      const price = c.price != null ? `ab ${c.price.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : "Preis k. A.";
+      row.innerHTML = `<div class="c-date"></div><div class="c-main"><div class="c-band"></div><div class="c-where"></div><div class="c-meta"></div></div>`;
+      row.querySelector(".c-date").textContent = fmtDate(c.date) + (c.time ? `\n${c.time} Uhr` : "");
+      row.querySelector(".c-band").textContent = c.artist + (isNew ? "  · NEU" : "");
+      if (isNew) row.classList.add("new");
+      row.querySelector(".c-where").textContent = `${c.venue}, ${c.city}`;
+      const meta = row.querySelector(".c-meta");
+      meta.textContent = price;
+      for (const [src, label] of [["eventim", "Eventim"], ["ticketmaster", "Ticketmaster"]]) {
+        if (!c.links || !c.links[src]) continue;
+        const a = document.createElement("a");
+        a.href = c.links[src]; a.target = "_blank"; a.rel = "noopener"; a.textContent = label;
+        meta.append(" · ", a);
+      }
+      card.appendChild(row);
+    }
+  }
+
+  async function refreshConcerts() {
+    const b = $("liveRefreshBtn");
+    b.disabled = true; b.textContent = "Prüfe …";
+    try {
+      const r = await wapi("/concerts/refresh?n=10");
+      toast(`Geprüft: ${r.log ? r.log.filter((l) => !/Fehler/.test(l)).length : 0} Künstler`);
+      if (r.log && r.log.some((l) => /Fehler/.test(l))) console.warn(r.log);
+      await loadConcerts();
+    } catch (e) { toast("Fehler: " + e.message, true); }
+    finally { b.disabled = false; b.textContent = "Weitere Künstler jetzt prüfen"; }
   }
 
   // ---------------------------------------------------------------- UI
   function showLogin() { stopPolling(); $("loginView").hidden = false; $("appView").hidden = true; $("logoutBtn").hidden = true; }
   function showApp() {
     $("loginView").hidden = true; $("appView").hidden = false; $("logoutBtn").hidden = false;
-    initBuilder(); renderBlacklist(); startPolling();
+    initBuilder(); renderBlacklist(); startPolling(); syncWorker();
   }
 
   function initTabs() {
     document.querySelectorAll(".tabs button").forEach((b) => {
       b.onclick = () => {
         document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-        ["now", "build", "black"].forEach((t) => { $("tab-" + t).hidden = t !== b.dataset.tab; });
+        ["now", "build", "live", "black"].forEach((t) => { $("tab-" + t).hidden = t !== b.dataset.tab; });
         if (b.dataset.tab === "now") startPolling(); else stopPolling();
+        if (b.dataset.tab === "live") initLive();
       };
     });
   }
@@ -619,8 +732,8 @@
     $("artistInput").onkeydown = (e) => { if (e.key === "Enter") addArtist(); };
     $("removeArtistBtn").onclick = removeArtist;
     $("loadMissingBtn").onclick = loadMissing;
-    $("exportBtn").onclick = exportBlacklist;
-    $("importInput").onchange = (e) => e.target.files[0] && importBlacklist(e.target.files[0]);
+    $("workerSaveBtn").onclick = saveWorker;
+    $("liveRefreshBtn").onclick = refreshConcerts;
     initTabs();
 
     try { await handleRedirect(); } catch (e) { alert(e.message); }

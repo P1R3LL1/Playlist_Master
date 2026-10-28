@@ -81,3 +81,18 @@ textarea { font-size: 15px; resize: vertical; }
 .artistlist li small { color: var(--muted); font-size: 12px; }
 .artistlist li.selected { background: #2a1a1c; box-shadow: inset 3px 0 0 var(--danger); }
 .full { width: 100%; margin-top: 8px; }
+
+/* Konzerte */
+.tabs button { font-size: 13px; padding: 10px 4px; }
+#workerInput { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.month { font-size: 15px; color: var(--muted); margin: 18px 4px 8px; text-transform: capitalize; }
+.concerts { padding: 0 14px; }
+.concert { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.concert:last-child { border-bottom: 0; }
+.c-date { flex: none; width: 92px; font-size: 13px; color: var(--muted); white-space: pre-line; }
+.c-main { min-width: 0; }
+.c-band { font-weight: 700; }
+.concert.new .c-band { color: var(--accent); }
+.c-where { font-size: 14px; margin-top: 2px; }
+.c-meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.c-meta a { color: var(--accent); text-decoration: none; }
