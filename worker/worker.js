@@ -12,9 +12,14 @@
  *   GET|POST /kick?key=…  aktuellen Song aus der laufenden Playlist entfernen, überspringen, Blacklist
  *   GET  /blacklist?key=… Blacklist als JSON
  *   POST /blacklist?key=… Einträge zusammenführen (Body: { "<uri>": {name, artists, …} })
+ *   POST /artists?key=…   Künstlerlisten der App speichern (Body: { "<Kategorie>": ["Band", …] })
+ *   GET  /concerts?key=…  Konzerte in NRW (sortiert nach Datum)
+ *   GET  /concerts/refresh?key=…  nächsten Schwung Künstler sofort prüfen
  *
- * Vorbereitet für später: scheduled() für Neuerscheinungen, Vorschläge, Konzerte NRW.
+ * Secret TM_KEY: Ticketmaster Consumer Key. Cron (z. B. alle 30 Min.) prüft je 8 Künstler.
  */
+
+import { runBatch, allArtists } from "./concerts.js";
 
 const API = "https://api.spotify.com/v1";
 const SCOPES = [
@@ -54,6 +59,24 @@ export default {
             return json({ ok: true, count: Object.keys(merged).length }, 200, cors);
           }
           return json(await getJSON(env, "blacklist", {}), 200, cors);
+        case "/artists":
+          await requireKey(url, env);
+          if (request.method === "POST") {
+            const cats = await request.json();
+            await env.PM.put("categories", JSON.stringify(cats));
+            return json({ ok: true, artists: allArtists(cats).length }, 200, cors);
+          }
+          return json(await getJSON(env, "categories", {}), 200, cors);
+        case "/concerts": {
+          await requireKey(url, env);
+          const store = await getJSON(env, "concerts", {});
+          const today = new Date().toISOString().slice(0, 10);
+          const list = Object.values(store).filter((e) => e.date >= today).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+          return json({ status: await getJSON(env, "concertStatus", null), concerts: list }, 200, cors);
+        }
+        case "/concerts/refresh":
+          await requireKey(url, env);
+          return json(await runBatch(env, Math.min(parseInt(url.searchParams.get("n") || "8", 10), 15)), 200, cors);
         default:
           return text("Nicht gefunden", 404, cors);
       }
@@ -62,8 +85,10 @@ export default {
     }
   },
 
-  // Platzhalter für tägliche Prüfungen (Neuerscheinungen, Konzerte) – Cron-Trigger folgt später
-  async scheduled(event, env, ctx) {},
+  // Cron: Konzerte in kleinen Häppchen prüfen (später auch Neuerscheinungen)
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runBatch(env, 8));
+  },
 };
 
 // ------------------------------------------------------------------ Helpers
