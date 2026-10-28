@@ -621,7 +621,7 @@
   function pushCategories() { if (workerCfg()) wapi("/artists", { method: "POST", body: categories() }).catch(() => {}); }
 
   // ---------------------------------------------------------------- Konzerte
-  const fmtDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtDate = (d) => new Date(d + "T12:00:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "2-digit" });
   const fmtMonth = (d) => new Date(d + "T12:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
   function initLive() {
