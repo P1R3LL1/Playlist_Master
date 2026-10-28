@@ -94,35 +94,52 @@ export function relevant(ev, artist) {
 
 const dayKey = (ev, artist) => `${String(ev.start).slice(0, 10)}|${norm(artist)}|${String(ev.plz).trim().slice(0, 3)}`;  // PLZ statt Stadt (TM schreibt z. B. „Cologne“)
 
-export function mergeInto(store, artist, events, pruneSource = null, now = new Date().toISOString()) {
+// Je Quelle ein eigener Speicher (concerts:eventim, concerts:ticketmaster), damit Cron und
+// App-Import sich nicht gegenseitig überschreiben. Zusammengeführt wird erst beim Lesen.
+export function mergeInto(store, artist, events, now = new Date().toISOString()) {
   const a = norm(artist);
-  // alte Einträge dieses Künstlers merken, um verschwundene Termine zu erkennen
   const seen = new Set();
   for (const ev of events) {
     const id = dayKey(ev, artist);
     seen.add(id);
-    const cur = store[id] || { id, artist, firstSeen: now, links: {} };
-    cur.artist = artist;
-    cur.date = String(ev.start).slice(0, 10);
-    if (String(ev.start).length > 10 && (!cur.time || ev.source === "eventim")) cur.time = String(ev.start).slice(11, 16);
-    cur.time = cur.time || "";
-    if (ev.venue && (!cur.venue || ev.source === "eventim")) cur.venue = ev.venue;
-    cur.venue = cur.venue || "";
-    if (!cur.city || ev.source === "eventim") cur.city = ev.city.replace(/\s*\(.*\)$/, "");
-    cur.plz = ev.plz;
-    if (ev.price != null && (cur.price == null || ev.price < cur.price)) { cur.price = ev.price; cur.currency = ev.currency; }
-    cur.links[ev.source] = ev.url;
-    cur.lastSeen = now;
-    store[id] = cur;
+    const prev = store[id];
+    store[id] = {
+      id, artist,
+      date: String(ev.start).slice(0, 10),
+      time: String(ev.start).length > 10 ? String(ev.start).slice(11, 16) : "",
+      venue: ev.venue || "",
+      city: String(ev.city || "").replace(/\s*\(.*\)$/, ""),
+      plz: ev.plz,
+      price: ev.price != null ? ev.price : null,
+      currency: ev.currency || "EUR",
+      url: ev.url,
+      firstSeen: prev ? prev.firstSeen : now,
+    };
   }
-  // Termine dieses Künstlers, die bei keiner Quelle mehr auftauchen, entfernen
-  // Termine, die diese Quelle nicht mehr meldet: Link entfernen, Eintrag löschen wenn keine Quelle übrig
-  if (pruneSource) for (const [id, ev] of Object.entries(store)) {
-    if (norm(ev.artist) !== a || seen.has(id) || !ev.links) continue;
-    delete ev.links[pruneSource];
-    if (!Object.keys(ev.links).length) delete store[id];
-  }
+  // Termine dieses Künstlers, die die Quelle nicht mehr meldet, entfernen
+  for (const [id, ev] of Object.entries(store)) if (norm(ev.artist) === a && !seen.has(id)) delete store[id];
   return store;
+}
+
+// Beide Quellen zu einer Liste zusammenführen (Eventim-Angaben bevorzugt, günstigster Preis)
+export function combine(eventim, ticketmaster) {
+  const out = {};
+  for (const [src, store] of [["eventim", eventim], ["ticketmaster", ticketmaster]]) {
+    for (const ev of Object.values(store || {})) {
+      const cur = out[ev.id];
+      if (!cur) {
+        out[ev.id] = { ...ev, links: { [src]: ev.url } };
+        delete out[ev.id].url;
+        continue;
+      }
+      cur.links[src] = ev.url;
+      if (!cur.venue) cur.venue = ev.venue;
+      if (!cur.time) cur.time = ev.time;
+      if (ev.price != null && (cur.price == null || ev.price < cur.price)) { cur.price = ev.price; cur.currency = ev.currency; }
+      if (ev.firstSeen < cur.firstSeen) cur.firstSeen = ev.firstSeen;
+    }
+  }
+  return Object.values(out);
 }
 
 export function prunePast(store) {
@@ -147,12 +164,12 @@ export async function runBatch(env, size = 8) {
   if (cursor >= artists.length) cursor = 0;
   const batch = artists.slice(cursor, cursor + size);
 
-  const store = prunePast(JSON.parse((await env.PM.get("concerts")) || "{}"));
+  const store = prunePast(JSON.parse((await env.PM.get("concerts:ticketmaster")) || "{}"));
   const log = [];
   for (const artist of batch) {
     try {
       const found = (await searchTicketmaster(artist, env.TM_KEY)).filter((e) => relevant(e, artist));
-      mergeInto(store, artist, found, "ticketmaster");
+      mergeInto(store, artist, found);
       log.push(`${artist}: ${found.length} Treffer`);
     } catch (e) {
       log.push(`${artist}: Ticketmaster Fehler ${e.message}`);
@@ -160,7 +177,7 @@ export async function runBatch(env, size = 8) {
   }
 
   const next = cursor + batch.length >= artists.length ? 0 : cursor + batch.length;
-  await env.PM.put("concerts", JSON.stringify(store));
+  await env.PM.put("concerts:ticketmaster", JSON.stringify(store));
   await env.PM.put("concertCursor", String(next));
   await env.PM.put("concertStatus", JSON.stringify({ at: new Date().toISOString(), cursor: next, total: artists.length, log }));
   return { from: cursor, to: cursor + batch.length, total: artists.length, log };
@@ -168,13 +185,14 @@ export async function runBatch(env, size = 8) {
 
 // Ergebnisse, die die App direkt bei Eventim abgefragt hat (Eventim blockt Cloudflare-Server)
 export async function importResults(env, source, results) {
-  const store = prunePast(JSON.parse((await env.PM.get("concerts")) || "{}"));
+  const key = "concerts:" + source;
+  const store = prunePast(JSON.parse((await env.PM.get(key)) || "{}"));
   let hits = 0;
   for (const [artist, events] of Object.entries(results || {})) {
     const found = (events || []).map((e) => ({ ...e, source })).filter((e) => relevant(e, artist));
     hits += found.length;
-    mergeInto(store, artist, found, source);
+    mergeInto(store, artist, found);
   }
-  await env.PM.put("concerts", JSON.stringify(store));
+  await env.PM.put(key, JSON.stringify(store));
   return { ok: true, artists: Object.keys(results || {}).length, hits };
 }
