@@ -20,7 +20,7 @@
  * Secret TM_KEY: Ticketmaster Consumer Key. Cron (z. B. alle 30 Min.) prüft je 8 Künstler.
  */
 
-import { runBatch, allArtists, importResults, combine } from "./concerts.js";
+import { runBatch, allArtists, importResults, readAll } from "./concerts.js";
 
 const API = "https://api.spotify.com/v1";
 const SCOPES = [
@@ -76,9 +76,8 @@ export default {
           return json(await getJSON(env, "categories", {}), 200, cors);
         case "/concerts": {
           await requireKey(url, env);
-          const [ev, tm] = await Promise.all([getJSON(env, "concerts:eventim", {}), getJSON(env, "concerts:ticketmaster", {})]);
           const today = new Date().toISOString().slice(0, 10);
-          const list = combine(ev, tm).filter((e) => e.date >= today).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+          const list = (await readAll(env)).filter((e) => e.date >= today).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
           return json({ status: await getJSON(env, "concertStatus", null), concerts: list }, 200, cors);
         }
         case "/concerts/import": {

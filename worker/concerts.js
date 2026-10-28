@@ -10,6 +10,9 @@
 const NRW_PLZ = new Set(["32", "33", "40", "41", "42", "44", "45", "46", "47", "48", "50", "51", "52", "53", "57", "58", "59"]);
 const FESTIVAL = /festival|rock am ring|rock im park|summer breeze|wacken|juicy beats|parookaville|ruhr in love|kreuzfahrt|cruise/i;
 
+// Zusatzangebote, die keine normalen Konzerttickets sind (würden sonst den „ab“-Preis verfälschen)
+const EXTRAS = /park(ticket|platz|en|ing)|shuttle|busreise|bus-?ticket|hotel|upgrade|\bvip\b|meet ?(&|and|und) ?greet|merch|garderobe/i;
+
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
 export const norm = (s) => String(s || "")
@@ -87,6 +90,7 @@ export function relevant(ev, artist) {
   if (!ev.attractions.some((x) => norm(x) === a)) return false;      // exakter Künstler, keine Tribute-Bands
   if (!isNrw(ev.plz)) return false;
   if (FESTIVAL.test(ev.name) || ev.categories.some((c) => /festival/i.test(c))) return false;
+  if (EXTRAS.test(ev.name)) return false;
   if (ev.attractions.length >= 6) return false;                        // viele Acts = Festival-artig
   if (!ev.start || new Date(ev.start) < new Date(Date.now() - 864e5)) return false;
   return true;
@@ -94,31 +98,60 @@ export function relevant(ev, artist) {
 
 const dayKey = (ev, artist) => `${String(ev.start).slice(0, 10)}|${norm(artist)}|${String(ev.plz).trim().slice(0, 3)}`;  // PLZ statt Stadt (TM schreibt z. B. „Cologne“)
 
-// Je Quelle ein eigener Speicher (concerts:eventim, concerts:ticketmaster), damit Cron und
-// App-Import sich nicht gegenseitig überschreiben. Zusammengeführt wird erst beim Lesen.
-export function mergeInto(store, artist, events, now = new Date().toISOString()) {
-  const a = norm(artist);
-  const seen = new Set();
+// Speicher: je Quelle UND Künstler ein eigener KV-Eintrag  c:<quelle>:<künstler>
+// (Cloudflare KV ist nur „irgendwann“ konsistent – ein gemeinsamer Eintrag würde bei schnell
+// aufeinanderfolgenden Schreibvorgängen Ergebnisse verlieren.)
+const kvKey = (source, artist) => `c:${source}:${norm(artist)}`;
+
+export function buildArtistEvents(prev, artist, events, now = new Date().toISOString()) {
+  const out = {};
   for (const ev of events) {
     const id = dayKey(ev, artist);
-    seen.add(id);
-    const prev = store[id];
-    store[id] = {
+    const old = (prev && prev[id]) || out[id];
+    out[id] = {
       id, artist,
       date: String(ev.start).slice(0, 10),
       time: String(ev.start).length > 10 ? String(ev.start).slice(11, 16) : "",
       venue: ev.venue || "",
       city: String(ev.city || "").replace(/\s*\(.*\)$/, ""),
       plz: ev.plz,
-      price: ev.price != null ? ev.price : null,
+      // mehrere Angebote am selben Tag (VIP, Parkticket …): günstigsten Preis behalten
+      price: out[id] && out[id].price != null && (ev.price == null || out[id].price < ev.price) ? out[id].price : (ev.price != null ? ev.price : null),
       currency: ev.currency || "EUR",
-      url: ev.url,
-      firstSeen: prev ? prev.firstSeen : now,
+      url: out[id] && out[id].price != null && (ev.price == null || out[id].price <= ev.price) ? out[id].url : ev.url,
+      firstSeen: old ? old.firstSeen : now,
     };
   }
-  // Termine dieses Künstlers, die die Quelle nicht mehr meldet, entfernen
-  for (const [id, ev] of Object.entries(store)) if (norm(ev.artist) === a && !seen.has(id)) delete store[id];
-  return store;
+  return out;
+}
+
+async function saveArtist(env, source, artist, events) {
+  const key = kvKey(source, artist);
+  const prevRaw = await env.PM.get(key);
+  const prev = prevRaw ? JSON.parse(prevRaw) : null;
+  const next = buildArtistEvents(prev, artist, events);
+  const nextRaw = Object.keys(next).length ? JSON.stringify(next) : null;
+  if (nextRaw === prevRaw) return;                      // nichts geändert → kein Schreibvorgang
+  if (nextRaw) await env.PM.put(key, nextRaw);
+  else if (prevRaw) await env.PM.delete(key);
+}
+
+export async function readAll(env) {
+  const stores = { eventim: {}, ticketmaster: {} };
+  let cursor;
+  const keys = [];
+  do {
+    const page = await env.PM.list({ prefix: "c:", cursor });
+    keys.push(...page.keys.map((k) => k.name));
+    cursor = page.list_complete ? null : page.cursor;
+  } while (cursor);
+  const values = await Promise.all(keys.map((k) => env.PM.get(k)));
+  keys.forEach((k, i) => {
+    const source = k.split(":")[1];
+    if (!stores[source] || !values[i]) return;
+    Object.assign(stores[source], JSON.parse(values[i]));
+  });
+  return combine(prunePast(stores.eventim), prunePast(stores.ticketmaster));
 }
 
 // Beide Quellen zu einer Liste zusammenführen (Eventim-Angaben bevorzugt, günstigster Preis)
@@ -164,12 +197,11 @@ export async function runBatch(env, size = 8) {
   if (cursor >= artists.length) cursor = 0;
   const batch = artists.slice(cursor, cursor + size);
 
-  const store = prunePast(JSON.parse((await env.PM.get("concerts:ticketmaster")) || "{}"));
   const log = [];
   for (const artist of batch) {
     try {
       const found = (await searchTicketmaster(artist, env.TM_KEY)).filter((e) => relevant(e, artist));
-      mergeInto(store, artist, found);
+      await saveArtist(env, "ticketmaster", artist, found);
       log.push(`${artist}: ${found.length} Treffer`);
     } catch (e) {
       log.push(`${artist}: Ticketmaster Fehler ${e.message}`);
@@ -177,7 +209,6 @@ export async function runBatch(env, size = 8) {
   }
 
   const next = cursor + batch.length >= artists.length ? 0 : cursor + batch.length;
-  await env.PM.put("concerts:ticketmaster", JSON.stringify(store));
   await env.PM.put("concertCursor", String(next));
   await env.PM.put("concertStatus", JSON.stringify({ at: new Date().toISOString(), cursor: next, total: artists.length, log }));
   return { from: cursor, to: cursor + batch.length, total: artists.length, log };
@@ -185,14 +216,11 @@ export async function runBatch(env, size = 8) {
 
 // Ergebnisse, die die App direkt bei Eventim abgefragt hat (Eventim blockt Cloudflare-Server)
 export async function importResults(env, source, results) {
-  const key = "concerts:" + source;
-  const store = prunePast(JSON.parse((await env.PM.get(key)) || "{}"));
   let hits = 0;
   for (const [artist, events] of Object.entries(results || {})) {
     const found = (events || []).map((e) => ({ ...e, source })).filter((e) => relevant(e, artist));
     hits += found.length;
-    mergeInto(store, artist, found);
+    await saveArtist(env, source, artist, found);
   }
-  await env.PM.put(key, JSON.stringify(store));
   return { ok: true, artists: Object.keys(results || {}).length, hits };
 }
