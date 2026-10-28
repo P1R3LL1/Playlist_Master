@@ -14,12 +14,13 @@
  *   POST /blacklist?key=… Einträge zusammenführen (Body: { "<uri>": {name, artists, …} })
  *   POST /artists?key=…   Künstlerlisten der App speichern (Body: { "<Kategorie>": ["Band", …] })
  *   GET  /concerts?key=…  Konzerte in NRW (sortiert nach Datum)
- *   GET  /concerts/refresh?key=…  nächsten Schwung Künstler sofort prüfen
+ *   GET  /concerts/refresh?key=…  nächsten Schwung Künstler sofort prüfen (Ticketmaster)
+ *   POST /concerts/import?key=…   Eventim-Ergebnisse aus der App übernehmen
  *
  * Secret TM_KEY: Ticketmaster Consumer Key. Cron (z. B. alle 30 Min.) prüft je 8 Künstler.
  */
 
-import { runBatch, allArtists } from "./concerts.js";
+import { runBatch, allArtists, importResults } from "./concerts.js";
 
 const API = "https://api.spotify.com/v1";
 const SCOPES = [
@@ -79,6 +80,11 @@ export default {
           const today = new Date().toISOString().slice(0, 10);
           const list = Object.values(store).filter((e) => e.date >= today).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
           return json({ status: await getJSON(env, "concertStatus", null), concerts: list }, 200, cors);
+        }
+        case "/concerts/import": {
+          await requireKey(url, env);
+          const body = await request.json();
+          return json(await importResults(env, body.source === "eventim" ? "eventim" : "other", body.results), 200, cors);
         }
         case "/concerts/refresh":
           await requireKey(url, env);

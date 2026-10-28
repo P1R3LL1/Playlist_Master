@@ -628,7 +628,7 @@
     const has = !!workerCfg();
     $("workerSetup").hidden = has;
     $("liveView").hidden = !has;
-    if (has) loadConcerts();
+    if (has) { loadConcerts(); eventimScan(); }
   }
 
   async function saveWorker() {
@@ -649,8 +649,8 @@
       renderConcerts(data.concerts || []);
       const s = data.status;
       $("liveStatus").textContent = s
-        ? `Zuletzt geprüft: ${new Date(s.at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })} · ${s.total} Künstler werden reihum geprüft (alle 30 Min. je 8).`
-        : "Noch keine Prüfung gelaufen – tippe auf „Weitere Künstler jetzt prüfen“.";
+        ? `Ticketmaster zuletzt: ${new Date(s.at).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })} (läuft automatisch alle 30 Min.)`
+        : "Ticketmaster: noch keine Prüfung gelaufen.";
     } catch (e) {
       list.innerHTML = "";
       $("liveStatus").textContent = "Fehler: " + e.message;
@@ -692,23 +692,90 @@
     }
   }
 
+  // ---------------------------------------------------------------- Eventim-Abfrage (läuft im Browser, weil
+  // Eventim Server-Anfragen von Cloudflare blockt; Ergebnisse gehen an den Worker)
+  async function eventimSearch(artist) {
+    const out = [];
+    for (let page = 1; page <= 3; page++) {
+      const params = new URLSearchParams({ webId: "web__eventim-de", language: "de", page: String(page), search_term: artist, categories: "Konzerte" });
+      const res = await fetch("https://public-api.eventim.com/websearch/search/api/exploration/v1/products?" + params);
+      if (!res.ok) throw new Error("Eventim " + res.status);
+      const data = await res.json();
+      for (const p of data.products || []) {
+        const le = p.typeAttributes && p.typeAttributes.liveEntertainment;
+        if (!le || !le.location) continue;
+        out.push({
+          name: p.name || "",
+          attractions: (p.attractions || []).map((a) => a.name),
+          categories: (p.categories || []).map((c) => c.name),
+          start: le.startDate || "",
+          venue: le.location.name || "",
+          city: le.location.city || "",
+          plz: le.location.postalCode || "",
+          price: typeof p.price === "number" ? p.price : null,
+          currency: p.currency || "EUR",
+          url: p.link || (p.url ? p.url.domain + p.url.path : ""),
+        });
+      }
+      if (!data.totalPages || page >= data.totalPages) break;
+    }
+    return out;
+  }
+
+  let eventimRunning = false;
+  async function eventimScan(force = false) {
+    if (eventimRunning || !workerCfg()) return;
+    const last = store.get("eventimScan", 0);
+    if (!force && Date.now() - last < 20 * 3600 * 1000) return;
+    eventimRunning = true;
+    const names = [...new Set(Object.values(categories()).flat())].sort((a, b) => a.localeCompare(b, "de"));
+    const status = (t) => { const el = $("eventimStatus"); if (el) el.textContent = t; };
+    let done = 0, failed = 0, pending = {};
+    const flush = async () => {
+      if (!Object.keys(pending).length) return;
+      const body = { source: "eventim", results: pending };
+      pending = {};
+      await wapi("/concerts/import", { method: "POST", body });
+    };
+    try {
+      const queue = [...names];
+      const worker = async () => {
+        while (queue.length) {
+          const name = queue.shift();
+          try { pending[name] = await eventimSearch(name); } catch { failed++; }
+          done++;
+          status(`Eventim: ${done}/${names.length} Künstler geprüft …`);
+          if (Object.keys(pending).length >= 15) await flush();
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+      await flush();
+      store.set("eventimScan", Date.now());
+      status(`Eventim zuletzt durchsucht: ${new Date().toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" })}` + (failed ? ` (${failed} Fehler)` : ""));
+      if (!$("tab-live").hidden) loadConcerts();
+    } catch (e) {
+      status("Eventim-Suche fehlgeschlagen: " + e.message);
+    } finally {
+      eventimRunning = false;
+    }
+  }
+
   async function refreshConcerts() {
     const b = $("liveRefreshBtn");
-    b.disabled = true; b.textContent = "Prüfe …";
+    b.disabled = true; b.textContent = "Aktualisiere …";
     try {
-      const r = await wapi("/concerts/refresh?n=10");
-      toast(`Geprüft: ${r.log ? r.log.filter((l) => !/Fehler/.test(l)).length : 0} Künstler`);
-      if (r.log && r.log.some((l) => /Fehler/.test(l))) console.warn(r.log);
+      await wapi("/concerts/refresh?n=10").catch(() => {});
+      await eventimScan(true);
       await loadConcerts();
     } catch (e) { toast("Fehler: " + e.message, true); }
-    finally { b.disabled = false; b.textContent = "Weitere Künstler jetzt prüfen"; }
+    finally { b.disabled = false; b.textContent = "Jetzt aktualisieren"; }
   }
 
   // ---------------------------------------------------------------- UI
   function showLogin() { stopPolling(); $("loginView").hidden = false; $("appView").hidden = true; $("logoutBtn").hidden = true; }
   function showApp() {
     $("loginView").hidden = true; $("appView").hidden = false; $("logoutBtn").hidden = false;
-    initBuilder(); renderBlacklist(); startPolling(); syncWorker();
+    initBuilder(); renderBlacklist(); startPolling(); syncWorker().then(() => eventimScan());
   }
 
   function initTabs() {

@@ -1,5 +1,6 @@
 /**
- * Konzert-Suche: Eventim (inoffizielle Such-API von eventim.de) + Ticketmaster Discovery API.
+ * Konzert-Suche: Ticketmaster Discovery API (per Cron im Worker) + Eventim (fragt die App ab, weil
+ * Eventim Anfragen von Cloudflare-Servern mit 403 ablehnt; Ergebnisse kommen über /concerts/import).
  * - Abfrage je Künstler, Treffer nur bei exakt gleichem Künstlernamen (keine Tribute-Bands)
  * - nur NRW (über Postleitzahl der Spielstätte), keine Festivals
  * - läuft in kleinen Häppchen per Cron, damit die Free-Limits von Cloudflare reichen
@@ -93,7 +94,7 @@ export function relevant(ev, artist) {
 
 const dayKey = (ev, artist) => `${String(ev.start).slice(0, 10)}|${norm(artist)}|${norm(ev.city)}`;
 
-export function mergeInto(store, artist, events, prune = true, now = new Date().toISOString()) {
+export function mergeInto(store, artist, events, pruneSource = null, now = new Date().toISOString()) {
   const a = norm(artist);
   // alte Einträge dieses Künstlers merken, um verschwundene Termine zu erkennen
   const seen = new Set();
@@ -114,8 +115,11 @@ export function mergeInto(store, artist, events, prune = true, now = new Date().
     store[id] = cur;
   }
   // Termine dieses Künstlers, die bei keiner Quelle mehr auftauchen, entfernen
-  if (prune) for (const [id, ev] of Object.entries(store)) {
-    if (norm(ev.artist) === a && !seen.has(id)) delete store[id];
+  // Termine, die diese Quelle nicht mehr meldet: Link entfernen, Eintrag löschen wenn keine Quelle übrig
+  if (pruneSource) for (const [id, ev] of Object.entries(store)) {
+    if (norm(ev.artist) !== a || seen.has(id) || !ev.links) continue;
+    delete ev.links[pruneSource];
+    if (!Object.keys(ev.links).length) delete store[id];
   }
   return store;
 }
@@ -145,14 +149,13 @@ export async function runBatch(env, size = 8) {
   const store = prunePast(JSON.parse((await env.PM.get("concerts")) || "{}"));
   const log = [];
   for (const artist of batch) {
-    const found = [];
-    let ok = 0;
-    for (const [src, fn] of [["eventim", () => searchEventim(artist)], ["ticketmaster", () => searchTicketmaster(artist, env.TM_KEY)]]) {
-      try { found.push(...(await fn()).filter((e) => relevant(e, artist))); ok++; }
-      catch (e) { log.push(`${artist}: ${src} Fehler ${e.message}`); }
+    try {
+      const found = (await searchTicketmaster(artist, env.TM_KEY)).filter((e) => relevant(e, artist));
+      mergeInto(store, artist, found, "ticketmaster");
+      log.push(`${artist}: ${found.length} Treffer`);
+    } catch (e) {
+      log.push(`${artist}: Ticketmaster Fehler ${e.message}`);
     }
-    if (ok) mergeInto(store, artist, found, ok === 2);  // löschen nur, wenn beide Quellen geantwortet haben
-    log.push(`${artist}: ${found.length} Treffer`);
   }
 
   const next = cursor + batch.length >= artists.length ? 0 : cursor + batch.length;
@@ -160,4 +163,17 @@ export async function runBatch(env, size = 8) {
   await env.PM.put("concertCursor", String(next));
   await env.PM.put("concertStatus", JSON.stringify({ at: new Date().toISOString(), cursor: next, total: artists.length, log }));
   return { from: cursor, to: cursor + batch.length, total: artists.length, log };
+}
+
+// Ergebnisse, die die App direkt bei Eventim abgefragt hat (Eventim blockt Cloudflare-Server)
+export async function importResults(env, source, results) {
+  const store = prunePast(JSON.parse((await env.PM.get("concerts")) || "{}"));
+  let hits = 0;
+  for (const [artist, events] of Object.entries(results || {})) {
+    const found = (events || []).map((e) => ({ ...e, source })).filter((e) => relevant(e, artist));
+    hits += found.length;
+    mergeInto(store, artist, found, source);
+  }
+  await env.PM.put("concerts", JSON.stringify(store));
+  return { ok: true, artists: Object.keys(results || {}).length, hits };
 }
