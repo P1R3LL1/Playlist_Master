@@ -19,7 +19,7 @@ export const norm = (s) => String(s || "")
   .replace(/&/g, "and")
   .replace(/[^a-z0-9]/g, "");
 
-const isNrw = (plz) => !!plz && NRW_PLZ.has(String(plz).trim().slice(0, 2));
+const isNrw = (plz) => /^\d{5}$/.test(String(plz || "").trim()) && NRW_PLZ.has(String(plz).trim().slice(0, 2));  // 5-stellig = Deutschland (AT/CH haben 4 Stellen)
 
 // ------------------------------------------------------------------ Eventim
 export async function searchEventim(artist) {
